@@ -1,0 +1,4 @@
+# One row per seat. The lead updates it on every event.
+id	seat	skill	model	state	now	next
+lead	lead	lead	<strong-model-A>	live	this chat	keep the queue honest
+w1	writer	writer	<fast-model-B>	idle	<unit> merged <sha>	<next unit from queue.md>

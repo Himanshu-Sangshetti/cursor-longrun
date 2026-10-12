@@ -1,0 +1,4 @@
+# Checkers and live-check append one row per verdict.
+ts	unit	decision	why	evidence	sha
+2026-01-01T10:00	<unit>	reject	3 of 40 items fail when measured	checker report, items 7, 19, 33	<sha>
+2026-01-01T11:30	<unit>	pass	all 40 measured clean	checker report	<sha>

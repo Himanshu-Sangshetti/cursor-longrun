@@ -1,0 +1,4 @@
+# One row per merge or reject. "twice" = yes means patch the owning skill now.
+date	trigger	miss	twice	encoded
+2026-01-01	merge <unit> <sha>	checker found 3 of 40 items still broken after the script was green	no	none yet
+2026-01-02	reject <unit> <sha>	same miss as 2026-01-01	yes	checker/SKILL.md Known failures, line 1
