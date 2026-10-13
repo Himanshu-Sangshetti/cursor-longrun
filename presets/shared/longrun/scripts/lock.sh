@@ -8,7 +8,7 @@ set -u
 here=$(cd "$(dirname "$0")/.." && pwd)
 # shellcheck disable=SC1091
 . "$here/config.env"
-[ "${1:-}" = run ] && [ $# -ge 2 ] || { echo "usage: $0 run <command...>" >&2; exit 2; }
+if [ "${1:-}" != run ] || [ $# -lt 2 ]; then echo "usage: $0 run <command...>" >&2; exit 2; fi
 shift
 slots=${LONGRUN_BUILD_SLOTS:-1}
 timeout=${LONGRUN_LOCK_TIMEOUT:-1800}
