@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Install longrun and set up the kit in the current git repo.
-#   curl -fsSL https://raw.githubusercontent.com/Himanshu-Sangshetti/long-horizon-harness/main/install.sh | bash -s -- --preset code
+#   curl -fsSL https://raw.githubusercontent.com/Himanshu-Sangshetti/cursor-longrun/main/install.sh | bash -s -- --preset code
 #   or, from a checkout:  ./install.sh --preset code
 # Arguments are passed to `longrun init`. Set LONGRUN_NO_INIT=1 to only install.
-# Installs to ~/.local/share/long-horizon-harness and links ~/.local/bin/longrun.
+# Installs to ~/.local/share/cursor-longrun and links ~/.local/bin/longrun.
 set -eu
-REPO=${LONGRUN_REPO:-Himanshu-Sangshetti/long-horizon-harness}
+REPO=${LONGRUN_REPO:-Himanshu-Sangshetti/cursor-longrun}
 REF=${LONGRUN_REF:-main}
-SHARE=${LONGRUN_SHARE:-$HOME/.local/share/long-horizon-harness}
+SHARE=${LONGRUN_SHARE:-$HOME/.local/share/cursor-longrun}
 BIN=${LONGRUN_BIN:-$HOME/.local/bin}
 
 src=""

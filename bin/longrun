@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # longrun: set up, check, watch and measure long-horizon agent runs in Cursor.
-# https://github.com/Himanshu-Sangshetti/long-horizon-harness  (MIT)
+# https://github.com/Himanshu-Sangshetti/cursor-longrun  (MIT)
 set -u
 
 VERSION=0.2.0
@@ -115,7 +115,7 @@ cmd_init() {
     esac
   done
   [ -d "$PRESETS/$preset" ] || die "init: preset must be one of: $PRESETS_ALL"
-  [ -d "$KIT" ] || die "kit not found at $KIT (set LONGRUN_HOME to your long-horizon-harness checkout)"
+  [ -d "$KIT" ] || die "kit not found at $KIT (set LONGRUN_HOME to your cursor-longrun checkout)"
   need_repo
   for f in $(kit_files "$preset"); do
     [ -e "$ROOT/$f" ] && conflicts="$conflicts $f"
