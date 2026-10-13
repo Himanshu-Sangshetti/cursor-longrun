@@ -1,0 +1,4 @@
+# Checkers and live-check append one row per verdict. decision: pass | reject
+ts	unit	decision	why	evidence	sha
+2026-10-13T09:12	readme-quickstart	pass	4 sections, min 52 words; all 3 commands ran	doc-words.sh PASS; ran pip install -e ., tinycalc 2+3, tinycalc 1/0	3f0b7d1
+2026-10-13T09:31	contributing	reject	2 of 5 sections under 40 words (Style 12, Sending a change 19)	doc-words.sh FAIL docs/CONTRIBUTING.md	9c2e4aa

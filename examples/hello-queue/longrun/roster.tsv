@@ -1,0 +1,6 @@
+# One row per seat or unit. The lead updates it on every event. state: live | open | idle | stuck | done
+id	seat	skill	model	state	now	next
+lead	lead	longrun-lead	strong-model-A	live	this chat	check contributing fix when it reports
+readme-quickstart	writer	longrun-writer	fast-model-B	done	merged a41c9e2	-
+contributing	writer	longrun-writer	fast-model-B	live	fix 1 on feat/contributing at ../tinycalc-contributing	then checker on strong-model-C
+api-reference	writer	longrun-writer	-	idle	queued	unit new after contributing merges

@@ -1,0 +1,4 @@
+# One row per merge or reject. twice=yes means patch the owning skill now.
+date	trigger	miss	twice	encoded
+2026-10-13	merge readme-quickstart a41c9e2	none; first unit passed on first check	no	none
+2026-10-13	reject contributing 9c2e4aa	sections written as one-line pointers to other files	no	none yet; patch longrun-writer if it repeats

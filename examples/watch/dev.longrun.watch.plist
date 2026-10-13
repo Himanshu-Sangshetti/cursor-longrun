@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Runs `longrun watch` every 10 minutes and posts a macOS notification when the run goes stale.
+  1. Replace /ABSOLUTE/PATH/TO/longrun and /ABSOLUTE/PATH/TO/your-repo.
+  2. cp dev.longrun.watch.plist ~/Library/LaunchAgents/
+  3. launchctl load ~/Library/LaunchAgents/dev.longrun.watch.plist
+  Remove with: launchctl unload ~/Library/LaunchAgents/dev.longrun.watch.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.longrun.watch</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/ABSOLUTE/PATH/TO/longrun</string>
+    <string>-C</string>
+    <string>/ABSOLUTE/PATH/TO/your-repo</string>
+    <string>watch</string>
+    <string>--stale-min</string>
+    <string>30</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>600</integer>
+  <key>StandardOutPath</key>
+  <string>/tmp/longrun-watch.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/longrun-watch.log</string>
+</dict>
+</plist>
