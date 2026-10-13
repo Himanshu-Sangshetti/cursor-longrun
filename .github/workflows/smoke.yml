@@ -1,0 +1,25 @@
+name: smoke
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Smoke test
+        run: bash tests/smoke.sh
+      - name: Python compiles
+        run: python3 -m py_compile tools/trace_report.py
+      - name: Shellcheck
+        if: runner.os == 'Linux'
+        run: |
+          shellcheck bin/longrun install.sh tests/smoke.sh kit/longrun/loop.sh \
+            kit/longrun/checks/*.sh presets/*/longrun/checks/*.sh \
+            presets/shared/longrun/scripts/lock.sh examples/hello-queue/longrun/checks/*.sh
