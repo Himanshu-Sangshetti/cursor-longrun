@@ -1,0 +1,3 @@
+# One row per seat or unit. The lead updates it on every event. state: live | open | idle | stuck | done
+id	seat	skill	model	state	now	next
+lead	lead	longrun-lead	see longrun-models.mdc	live	this chat	keep the queue written

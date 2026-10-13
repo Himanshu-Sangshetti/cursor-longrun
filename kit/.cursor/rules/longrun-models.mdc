@@ -1,0 +1,20 @@
+---
+description: Role to model map for the longrun lead and its workers
+alwaysApply: true
+---
+
+# longrun model map
+
+Strong model for the lead and for judging: these roles decide.
+Fast model for writing and finding: these roles produce volume.
+Checkers run on a different model family from the writers they check, so they do not share blind spots.
+
+| Role | Model | Why |
+| --- | --- | --- |
+| lead | <<FILL: strong model, e.g. your best reasoning model>> | one long chat; decides, briefs, merges |
+| writer | <<FILL: fast model>> | many short runs; does the work |
+| finder | <<FILL: fast model>> | reads and reports file pointers |
+| checker | <<FILL: strong model, different family from the writer>> | measures; passes or rejects |
+| live-check | <<FILL: model, different family from the writer>> | opens the live result as a user would |
+
+When you spawn a worker with the Task tool, set its model from this table. Never give a checker the writer's model family.
