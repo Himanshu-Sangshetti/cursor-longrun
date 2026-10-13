@@ -1,0 +1,397 @@
+#!/usr/bin/env bash
+# longrun: set up, check, watch and measure long-horizon agent runs in Cursor.
+# https://github.com/Himanshu-Sangshetti/long-horizon-harness  (MIT)
+set -u
+
+VERSION=0.2.0
+PRESETS_ALL="code content shared"
+
+resolve_dir() { # directory of a path, following symlinks (portable readlink -f)
+  local p=$1 d
+  while [ -h "$p" ]; do
+    d=$(cd -P "$(dirname "$p")" && pwd)
+    p=$(readlink "$p")
+    case $p in /*) ;; *) p="$d/$p" ;; esac
+  done
+  cd -P "$(dirname "$p")" && pwd
+}
+LONGRUN_HOME=${LONGRUN_HOME:-$(dirname "$(resolve_dir "${BASH_SOURCE[0]}")")}
+KIT=$LONGRUN_HOME/kit
+PRESETS=$LONGRUN_HOME/presets
+TOOLS=$LONGRUN_HOME/tools
+
+die() { echo "longrun: $*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+usage: longrun [-C <dir>] <command> [options]
+
+  init [--preset code|content|shared] [--goal "..."] [--force]
+                      copy the kit into this git repo
+  doctor              check the repo is ready to leave alone; exit 1 with fix lines
+  status              one-screen board from the state files
+  unit new <name> [--dir <path>]
+                      branch feat/<name> plus a worktree at ../<repo>-<name>
+  unit done <name> [--force]
+                      remove the worktree and branch after the merge
+  watch [--stale-min N]
+                      exit 1 and notify if no state file changed in N minutes
+  report [--chat <id>] [--since T] [--until T] [--state-dir D] [--list-chats] [--show-human]
+                      measure a run from Cursor's local database
+  version
+EOF
+}
+
+# ---------- helpers ----------
+
+mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
+
+need_repo() {
+  ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repository (run: git init)"
+  LR=$ROOT/longrun
+}
+
+load_config() {
+  [ -f "$LR/config.env" ] || die "no longrun/config.env here (run: longrun init)"
+  # shellcheck disable=SC1091
+  . "$LR/config.env"
+}
+
+replace_in() { # replace_in <file> <needle> <value>: literal, all occurrences
+  local f=$1 tmp
+  [ -f "$f" ] || return 0
+  tmp=$(mktemp)
+  N=$2 V=$3 awk 'BEGIN { n = ENVIRON["N"]; v = ENVIRON["V"] }
+    { out = ""; s = $0
+      while ((i = index(s, n)) > 0) { out = out substr(s, 1, i - 1) v; s = substr(s, i + length(n)) }
+      print out s }' "$f" >"$tmp" && cat "$tmp" >"$f"
+  rm -f "$tmp"
+}
+
+set_conf() { # set_conf <KEY> <value>: rewrite KEY=... in config.env, single-quoted
+  local q tmp
+  q=$(printf '%s' "$2" | sed "s/'/'\\\\''/g")
+  tmp=$(mktemp)
+  K=$1 V="'$q'" awk 'BEGIN { k = ENVIRON["K"] "=" }
+    index($0, k) == 1 { print k ENVIRON["V"]; next } { print }' "$LR/config.env" >"$tmp" && cat "$tmp" >"$LR/config.env"
+  rm -f "$tmp"
+}
+
+kit_files() { # relative paths of kit files plus preset files (config.env handled separately)
+  (cd "$KIT" && find . -type f ! -name .DS_Store | sed 's|^\./||')
+  (cd "$PRESETS/$1" && find . -type f ! -name .DS_Store ! -path ./config.env | sed 's|^\./||')
+}
+
+tsv_rows() { # data rows of a tsv: no comments, no header
+  grep -v '^#' "$1" 2>/dev/null | sed 1d | grep -v '^[[:space:]]*$'
+}
+
+detect_test_cmd() {
+  if [ -f "$ROOT/package.json" ] && grep -q '"test"' "$ROOT/package.json"; then echo "npm test"
+  elif [ -f "$ROOT/Cargo.toml" ]; then echo "cargo test"
+  elif [ -f "$ROOT/go.mod" ]; then echo "go test ./..."
+  elif [ -f "$ROOT/pyproject.toml" ] || [ -f "$ROOT/pytest.ini" ] || [ -d "$ROOT/tests" ] && command -v python3 >/dev/null; then echo "python3 -m pytest -q"
+  elif [ -f "$ROOT/Makefile" ] && grep -q '^test:' "$ROOT/Makefile"; then echo "make test"
+  fi
+}
+
+detect_playwright() {
+  local d
+  for d in "$ROOT/node_modules" "$(command -v npm >/dev/null && npm root -g 2>/dev/null)"; do
+    [ -n "$d" ] && [ -d "$d/playwright" ] && { echo "$d"; return; }
+  done
+}
+
+# ---------- init ----------
+
+cmd_init() {
+  local preset=code goal="" force=0 f conflicts="" sha
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --preset) preset=${2:-}; shift 2 ;;
+      --goal) goal=${2:-}; shift 2 ;;
+      --force) force=1; shift ;;
+      *) die "init: unknown option $1" ;;
+    esac
+  done
+  [ -d "$PRESETS/$preset" ] || die "init: preset must be one of: $PRESETS_ALL"
+  [ -d "$KIT" ] || die "kit not found at $KIT (set LONGRUN_HOME to your long-horizon-harness checkout)"
+  need_repo
+  for f in $(kit_files "$preset"); do
+    [ -e "$ROOT/$f" ] && conflicts="$conflicts $f"
+  done
+  if [ -n "$conflicts" ] && [ $force = 0 ]; then
+    echo "longrun: these files already exist; nothing was written:" >&2
+    for f in $conflicts; do echo "  $f" >&2; done
+    die "pass --force to overwrite them"
+  fi
+  for f in $(kit_files "$preset"); do
+    mkdir -p "$ROOT/$(dirname "$f")"
+    if [ -f "$KIT/$f" ]; then cp "$KIT/$f" "$ROOT/$f"; else cp "$PRESETS/$preset/$f" "$ROOT/$f"; fi
+  done
+  cat "$PRESETS/$preset/config.env" >>"$LR/config.env"
+  set_conf LONGRUN_PRESET "$preset"
+  if [ -n "$goal" ]; then
+    for f in longrun/queue.md longrun/prompts/start-lead.md .cursor/commands/longrun-start.md; do
+      replace_in "$ROOT/$f" "<<FILL: goal>>" "$goal"
+    done
+  fi
+  if sha=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null); then
+    replace_in "$LR/revert.md" "<<FILL: pre-run sha>>" "$sha"
+  fi
+  case $preset in
+    code) f=$(detect_test_cmd); [ -n "$f" ] && set_conf LONGRUN_TEST_CMD "$f" ;;
+    content) f=$(detect_playwright); [ -n "$f" ] && set_conf LONGRUN_PLAYWRIGHT "$f" ;;
+  esac
+  cat <<EOF
+longrun: kit installed in $ROOT (preset: $preset)
+
+Next:
+  1. Fill every <<FILL: ...>> line:  grep -rn '<<FILL' longrun .cursor
+     (queue.md, revert.md, .cursor/rules/longrun-models.mdc, and longrun/config.env)
+  2. Commit, then run:  longrun doctor   until it passes.
+  3. In Cursor, open a new Agent chat and type /longrun-start (or paste
+     longrun/prompts/start-lead.md). That chat is the lead. Grant the permissions it asks for.
+Then watch from outside the chat:  longrun status,  longrun watch,  longrun report
+EOF
+}
+
+# ---------- doctor ----------
+
+NFAIL=0
+ok() { echo "ok    $1"; }
+warn() { echo "warn  $1"; [ -n "${2:-}" ] && echo "      fix: $2"; }
+fail() { echo "FAIL  $1"; echo "      fix: $2"; NFAIL=$((NFAIL + 1)); }
+
+no_fill() { # no_fill <relative file> <what> <fix>
+  if [ ! -f "$ROOT/$1" ]; then fail "$1 missing" "longrun init --force"
+  elif grep -q '<<FILL' "$ROOT/$1"; then fail "$2 ($1 still has <<FILL>> lines)" "$3"
+  else ok "$2"; fi
+}
+
+cmd_doctor() {
+  local f n missing="" x bad=""
+  need_repo
+  ok "git repo at $ROOT"
+  [ -f "$LR/config.env" ] || { fail "kit not installed" "longrun init --preset code"; exit 1; }
+  load_config
+  if [ -z "$(git -C "$ROOT" status --porcelain)" ]; then ok "working tree clean"
+  else fail "working tree has uncommitted changes" "git add -A && git commit -m 'longrun: set up run'"; fi
+
+  n=$(grep -E '^[0-9]+\. ' "$LR/queue.md" 2>/dev/null | grep -vc '<<FILL')
+  if [ "$n" -ge 1 ]; then ok "queue has $n unit(s)"
+  else fail "queue has no units" "write numbered units under '## Main line' in longrun/queue.md"; fi
+  no_fill longrun/queue.md "queue goal and done-when written" "fill Goal: and Done when: in longrun/queue.md"
+  no_fill longrun/revert.md "revert.md filled" "fill the pre-run SHA, deployment and 'does not undo' lines"
+  no_fill .cursor/rules/longrun-models.mdc "model map filled" "put real model names in .cursor/rules/longrun-models.mdc"
+  no_fill longrun/prompts/start-lead.md "start prompt has a goal" "longrun init --force --goal '...' or edit the Goal: line"
+
+  for x in $(kit_files "${LONGRUN_PRESET:-code}"); do [ -e "$ROOT/$x" ] || missing="$missing $x"; done
+  if [ -z "$missing" ]; then ok "preset '${LONGRUN_PRESET:-code}' files present"
+  else fail "missing kit files:$missing" "longrun init --preset ${LONGRUN_PRESET:-code} --force"; fi
+
+  case ${LONGRUN_PRESET:-code} in
+    code)
+      if [ -n "${LONGRUN_TEST_CMD:-}" ]; then ok "test command: $LONGRUN_TEST_CMD"
+      else fail "LONGRUN_TEST_CMD is empty" "set it in longrun/config.env, e.g. LONGRUN_TEST_CMD='npm test'"; fi ;;
+    content)
+      if [ -n "${LONGRUN_PLAYWRIGHT:-}" ] && [ -d "$LONGRUN_PLAYWRIGHT/playwright" ]; then ok "Playwright at $LONGRUN_PLAYWRIGHT"
+      else fail "LONGRUN_PLAYWRIGHT does not point at a node_modules with playwright" \
+        "npm i -D playwright && npx playwright install chromium, then LONGRUN_PLAYWRIGHT=\$PWD/node_modules"; fi
+      if [ -n "${LONGRUN_LIVE_URL:-}" ]; then ok "live URL: $LONGRUN_LIVE_URL"
+      else warn "LONGRUN_LIVE_URL is empty" "set it if units get published"; fi ;;
+    shared)
+      if [ -n "${LONGRUN_BUILD_CMD:-}" ]; then ok "build command: $LONGRUN_BUILD_CMD"
+      else fail "LONGRUN_BUILD_CMD is empty" "set it in longrun/config.env, e.g. LONGRUN_BUILD_CMD='make build'"; fi
+      no_fill longrun/owners.md "owner table filled" "one row per workstream with the file globs it owns" ;;
+  esac
+
+  for x in "$LR"/loop.sh "$LR"/checks/*.sh "$LR"/scripts/*.sh; do
+    [ -f "$x" ] && [ ! -x "$x" ] && bad="$bad ${x#"$ROOT"/}"
+  done
+  if [ -z "$bad" ]; then ok "scripts executable"; else fail "not executable:$bad" "chmod +x$bad"; fi
+
+  if [ "$(uname -s)" = Darwin ]; then
+    if command -v caffeinate >/dev/null; then ok "caffeinate available (loop.sh keeps the Mac awake)"
+    else fail "caffeinate not found" "loop.sh relies on it; keep the Mac awake another way"; fi
+    warn "a Mac on battery may still sleep" "keep it on power with the lid open, or run on a desktop"
+  else
+    warn "no caffeinate on $(uname -s)" "disable sleep for the run, e.g. systemd-inhibit --what=sleep bash longrun/loop.sh"
+  fi
+  if command -v python3 >/dev/null; then ok "python3 available (longrun report)"
+  else warn "python3 not found" "install Python 3 for longrun report"; fi
+  if command -v longrun >/dev/null; then ok "longrun on PATH"
+  else warn "longrun not on PATH; the lead runs it" "add ~/.local/bin to PATH"; fi
+
+  echo
+  if [ $NFAIL -gt 0 ]; then echo "doctor: $NFAIL problem(s). Fix them before you leave the run alone."; exit 1; fi
+  echo "doctor: ready. Start the lead with /longrun-start."
+}
+
+# ---------- status ----------
+
+age_line() {
+  local f=$1 t now
+  [ -f "$f" ] || { echo "missing"; return; }
+  t=$(mtime "$f"); now=$(date +%s)
+  echo "$(( (now - t) / 60 )) min ago"
+}
+
+cmd_status() {
+  need_repo; load_config
+  local w=${COLUMNS:-100} rows
+  echo "longrun  $(basename "$ROOT")  preset ${LONGRUN_PRESET:-?}   status.md updated $(age_line "$LR/status.md")"
+  grep -m1 '^updated:' "$LR/status.md" 2>/dev/null | sed 's/^/  /'
+  echo
+  echo "queue (next up)"
+  rows=$(grep -E '^[0-9]+\. ' "$LR/queue.md" | grep -viE 'state: *(done|merged|skip)' | head -n 3)
+  [ -n "$rows" ] && echo "$rows" | sed 's/^/  /' | cut -c1-"$w" || echo "  (empty)"
+  if grep -q '^## Questions' "$LR/queue.md" && awk '/^## Questions/{f=1;next} /^## /{f=0} f && /^[-0-9]/' "$LR/queue.md" | grep -q .; then
+    echo "  QUESTIONS FOR YOU: see longrun/queue.md"
+  fi
+  echo
+  echo "in flight (roster)"
+  rows=$(tsv_rows "$LR/roster.tsv" | awk -F'\t' '$5 != "idle" && $5 != "done" { printf "  %-14s %-8s %-6s %s\n", $1, $2, $5, $6 }')
+  [ -n "$rows" ] && echo "$rows" | cut -c1-"$w" || echo "  (none)"
+  echo
+  echo "last 5 decisions"
+  rows=$(tsv_rows "$LR/decisions.tsv" | tail -n 5 | awk -F'\t' '{ printf "  %-16s %-14s %-6s %s\n", $1, $2, $3, $4 }')
+  [ -n "$rows" ] && echo "$rows" | cut -c1-"$w" || echo "  (none)"
+  echo
+  echo "last 5 lessons"
+  rows=$(tsv_rows "$LR/lessons.tsv" | tail -n 5 | awk -F'\t' '{ printf "  %-10s twice=%-3s %s\n", $1, $4, $3 }')
+  [ -n "$rows" ] && echo "$rows" | cut -c1-"$w" || echo "  (none)"
+}
+
+# ---------- unit ----------
+
+roster_set_state() { # roster_set_state <id> <state>
+  local tmp; tmp=$(mktemp)
+  I=$1 S=$2 awk -F'\t' 'BEGIN { OFS = "\t" } $1 == ENVIRON["I"] { $5 = ENVIRON["S"] } { print }' "$LR/roster.tsv" >"$tmp" \
+    && cat "$tmp" >"$LR/roster.tsv"
+  rm -f "$tmp"
+}
+
+cmd_unit() {
+  local sub=${1:-} name=${2:-} dir="" force=0 path branch base
+  shift 2 2>/dev/null || die "usage: longrun unit new|done <name>"
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --dir) dir=${2:-}; shift 2 ;;
+      --force) force=1; shift ;;
+      *) die "unit: unknown option $1" ;;
+    esac
+  done
+  printf '%s' "$name" | grep -Eq '^[a-z0-9][a-z0-9._-]*$' || die "unit name must be lowercase letters, digits, . _ -"
+  need_repo; load_config
+  branch=feat/$name
+  case $sub in
+    new)
+      base=${LONGRUN_WORKTREE_DIR:-..}
+      case $base in /*) ;; *) base=$ROOT/$base ;; esac
+      path=${dir:-$base/$(basename "$ROOT")-$name}
+      [ -e "$path" ] && die "$path already exists"
+      if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$branch"; then
+        git -C "$ROOT" worktree add -q "$path" "$branch" || die "git worktree add failed"
+      else
+        git -C "$ROOT" worktree add -q -b "$branch" "$path" || die "git worktree add failed"
+      fi
+      path=$(cd "$path" && pwd)
+      if ! tsv_rows "$LR/roster.tsv" | cut -f1 | grep -qx "$name"; then
+        printf '%s\twriter\tlongrun-writer\t-\topen\t%s at %s\tbrief a writer\n' "$name" "$branch" "$path" >>"$LR/roster.tsv"
+      else
+        roster_set_state "$name" open
+      fi
+      echo "unit $name: branch $branch, worktree $path"
+      ;;
+    done)
+      path=$(git -C "$ROOT" worktree list --porcelain | awk -v b="refs/heads/$branch" '/^worktree /{p=substr($0,10)} $0=="branch " b {print p}')
+      if [ $force = 0 ] && ! git -C "$ROOT" merge-base --is-ancestor "$branch" HEAD 2>/dev/null; then
+        die "$branch is not merged into $(git -C "$ROOT" rev-parse --abbrev-ref HEAD); merge it first or pass --force"
+      fi
+      if [ -n "$path" ]; then
+        if [ $force = 1 ]; then git -C "$ROOT" worktree remove --force "$path"; else git -C "$ROOT" worktree remove "$path"; fi \
+          || die "could not remove worktree $path (uncommitted changes? use --force)"
+      fi
+      if [ $force = 1 ]; then git -C "$ROOT" branch -q -D "$branch" 2>/dev/null; else git -C "$ROOT" branch -q -d "$branch" 2>/dev/null; fi
+      roster_set_state "$name" "done"
+      echo "unit $name: done${path:+, removed $path}"
+      ;;
+    *) die "usage: longrun unit new|done <name>" ;;
+  esac
+}
+
+# ---------- watch ----------
+
+notify() {
+  [ "${LONGRUN_NO_NOTIFY:-}" = 1 ] && return 0
+  if command -v osascript >/dev/null 2>&1; then
+    M=$1 osascript -e 'display notification (system attribute "M") with title "longrun"' >/dev/null 2>&1 || true
+  elif command -v notify-send >/dev/null 2>&1; then
+    notify-send longrun "$1" || true
+  fi
+}
+
+cmd_watch() {
+  local stale="" f t newest=0 newest_f="" now age msg
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --stale-min) stale=${2:-}; shift 2 ;;
+      *) die "watch: unknown option $1" ;;
+    esac
+  done
+  need_repo; load_config
+  stale=${stale:-${LONGRUN_STALE_MIN:-30}}
+  for f in "$LR"/status.md "$LR"/queue.md "$LR"/*.tsv; do
+    [ -f "$f" ] || continue
+    t=$(mtime "$f")
+    [ "$t" -gt "$newest" ] && { newest=$t; newest_f=${f#"$ROOT"/}; }
+  done
+  [ "$newest" -gt 0 ] || die "no state files in $LR"
+  now=$(date +%s); age=$(( (now - newest) / 60 ))
+  if [ "$age" -ge "$stale" ]; then
+    msg="longrun STALE: $(basename "$ROOT") has no state change for $age min (newest: $newest_f). Check the lead chat and that the machine is awake."
+    echo "$msg"; notify "$msg"; exit 1
+  fi
+  echo "longrun ok: $(basename "$ROOT") state changed $age min ago ($newest_f)"
+}
+
+# ---------- report ----------
+
+cmd_report() {
+  local has_chat=0 has_sd=0 a
+  for a in "$@"; do
+    case $a in --chat|--list-chats) has_chat=1 ;; --state-dir) has_sd=1 ;; -h|--help) has_chat=1 ;; esac
+  done
+  command -v python3 >/dev/null || die "report needs python3"
+  if ROOT=$(git rev-parse --show-toplevel 2>/dev/null) && [ -f "$ROOT/longrun/config.env" ]; then
+    LR=$ROOT/longrun; load_config
+    if [ $has_chat = 0 ]; then
+      [ -n "${LONGRUN_LEAD_CHAT:-}" ] || die "pass --chat <id> or set LONGRUN_LEAD_CHAT (find it with: longrun report --list-chats)"
+      set -- --chat "$LONGRUN_LEAD_CHAT" "$@"
+    fi
+  fi
+  [ $has_sd = 1 ] || set -- --state-dir longrun "$@"
+  exec python3 "$TOOLS/trace_report.py" "$@"
+}
+
+# ---------- main ----------
+
+if [ "${1:-}" = -C ]; then
+  [ -n "${2:-}" ] || die "-C needs a directory"
+  cd "$2" || die "cannot cd to $2"
+  shift 2
+fi
+cmd=${1:-help}
+[ $# -gt 0 ] && shift
+case $cmd in
+  init) cmd_init "$@" ;;
+  doctor) cmd_doctor "$@" ;;
+  status) cmd_status "$@" ;;
+  unit) cmd_unit "$@" ;;
+  watch) cmd_watch "$@" ;;
+  report) cmd_report "$@" ;;
+  version|--version) echo "longrun $VERSION" ;;
+  help|-h|--help) usage ;;
+  *) usage >&2; exit 1 ;;
+esac
